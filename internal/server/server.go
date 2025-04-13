@@ -5,9 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/unspok3n/beatportdl/config"
-	"github.com/unspok3n/beatportdl/internal/beatport"
-	"github.com/unspok3n/beatportdl/internal/taglib"
+	"github.com/unspok3n/beatportdl-ui/config"
 )
 
 type Track struct {
@@ -16,15 +14,19 @@ type Track struct {
 	URL    string `json:"url"`
 }
 
-func Start(cfg *config.Config) error {
-	http.HandleFunc("/download", downloadHandler(cfg))
-
-	addr := ":8080" // TODO: Make port configurable
-	fmt.Printf("Server listening on %s\n", addr)
-	return http.ListenAndServe(addr, nil)
+func NewServerError(code int, message string) *ServerError {
+	return &ServerError{
+		Code:    code,
+		Message: message,
+	}
 }
 
-func downloadHandler(cfg *config.Config) http.HandlerFunc {
+func Start(cfg *config.AppConfig) error {
+	http.HandleFunc("/download", downloadHandler(cfg))
+	return nil
+}
+
+func downloadHandler(cfg *config.AppConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)

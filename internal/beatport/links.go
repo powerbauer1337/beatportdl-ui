@@ -35,7 +35,7 @@ var (
 	ErrInvalidUrl = errors.New("invalid url")
 )
 
-func (b *Beatport) ParseUrl(inputURL string) (*Link, error) {
+func ParseUrl(inputURL string) (*Link, error) {
 	u, err := url.Parse(inputURL)
 	if err != nil {
 		return nil, err
@@ -122,4 +122,8 @@ func (b *Beatport) ParseUrl(inputURL string) (*Link, error) {
 	link.Params = u.RawQuery
 
 	return &link, nil
+}
+
+func (b *Beatport) ParseUrl(inputURL string) (*Link, error) {
+	return ParseUrl(inputURL)
 }

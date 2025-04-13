@@ -54,22 +54,22 @@ A GitHub README is the gateway to an open-source project, serving as the primary
 
 ## Contributing Guidelines
 - **Welcome contributions**: State that all skill levels are encouraged to participate.
-- **Link to details**: Reference a `CONTRIBUTING.md` file if available (e.g., "See [Contributing](./CONTRIBUTING.md) for more").
+- **Link to details**: Reference a `CONTRIBUTING.md` file if available (e.g., "See [Contributing](mdc:CONTRIBUTING.md) for more").
 - **Outline processes**: Briefly explain how to submit issues or pull requests (e.g., "File bugs on GitHub Issues; PRs should include tests").
 - **Set expectations**: Mention coding standards or requirements (e.g., "Follow Rustfmt and pass Clippy checks").
 
 ## License
 - **Specify the license**: Clearly state the terms (e.g., "Licensed under MIT").
-- **Include or link**: Add the full text or link to a `LICENSE` file (e.g., "[MIT License](./LICENSE)").
-- **Guide selection**: Suggest using [choosealicense.com](https://choosealicense.com/) if undecided.
+- **Include or link**: Add the full text or link to a `LICENSE` file (e.g., "[MIT License](mdc:LICENSE)").
+- **Guide selection**: Suggest using [choosealicense.com](mdc:https:/choosealicense.com) if undecided.
 
 ## Badges
 - **Display status**: Use badges for build status, version, etc. Example:
   ```markdown
-  ![Build](https://img.shields.io/badge/build-passing-green)
-  ![License](https://img.shields.io/badge/license-MIT-blue)
+  ![Build](mdc:https:/img.shields.io/badge/build-passing-green)
+  ![License](mdc:https:/img.shields.io/badge/license-MIT-blue)
   ```
-- **Source badges**: Recommend services like [shields.io](https://shields.io/) and link them to relevant pages.
+- **Source badges**: Recommend services like [shields.io](mdc:https:/shields.io) and link them to relevant pages.
 - **Place strategically**: Position badges at the top for immediate visibility.
 
 ## Dependencies
@@ -86,20 +86,20 @@ A GitHub README is the gateway to an open-source project, serving as the primary
 - **Keep updated**: Reflect the latest `Cargo.toml` or equivalent.
 
 ## Support
-- **Offer help channels**: List contact options (e.g., "Join our [Discord](https://discord.gg/xyz) or email support@project.com").
-- **Encourage issues**: Point to GitHub Issues (e.g., "Report bugs at [Issues](https://github.com/user/project/issues)").
+- **Offer help channels**: List contact options (e.g., "Join our [Discord](mdc:https:/discord.gg/xyz) or email support@project.com").
+- **Encourage issues**: Point to GitHub Issues (e.g., "Report bugs at [Issues](mdc:https:/github.com/user/project/issues)").
 - **Set response tone**: Assure timely replies (e.g., "We aim to respond within 48 hours").
 
 ## Credits
 - **Recognize contributors**: Name key individuals or teams (e.g., "Thanks to @alice and @bob").
-- **Link profiles**: Use GitHub handles or URLs (e.g., "[@alice](https://github.com/alice)").
+- **Link profiles**: Use GitHub handles or URLs (e.g., "[@alice](mdc:https:/github.com/alice)").
 - **Reference GitHub**: Suggest viewing all contributors via the repository’s contributor graph.
 
 ## Visual Suggestions
 - **Recommend types**: Suggest screenshots, diagrams, or GIFs (e.g., "A GIF of the app running would show its speed").
 - **Describe placement**: Advise proximity to relevant text (e.g., "Place a terminal screenshot after installation steps").
 - **Acknowledge limits**: Note that LLMs can’t create visuals but can describe them (e.g., "Diagram the request flow here").
-- **Mention tools**: Suggest [Asciinema](https://asciinema.org/) or [ttygif](https://github.com/icholy/ttygif) for terminal demos.
+- **Mention tools**: Suggest [Asciinema](mdc:https:/asciinema.org) or [ttygif](mdc:https:/github.com/icholy/ttygif) for terminal demos.
 
 ## Formatting and Style
 - **Leverage Markdown**: Use headers, lists, tables, and emphasis (e.g., **bold**, *italics*).

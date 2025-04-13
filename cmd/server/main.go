@@ -13,20 +13,15 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"sync"
 
 	"github.com/google/uuid"
 	"gopkg.in/yaml.v2"
 
-	"unspok3n/beatportdl/config"
-	"unspok3n/beatportdl/internal/beatport"
-	"unspok3n/beatportdl/internal/server"
+	"github.com/unspok3n/beatportdl-ui/config"
+	"github.com/unspok3n/beatportdl-ui/internal/beatport"
+	"github.com/unspok3n/beatportdl-ui/internal/server"
 )
-
-type Config struct {
-	MaxConcurrentDownloads int `yaml:"max_concurrent_downloads"`
-}
 
 type downloadStatus struct {
 	TrackURL string                 `json:"track_url"`
@@ -37,7 +32,7 @@ type downloadStatus struct {
 var (
 	downloads         = make(map[string]*downloadStatus)
 	downloadsMutex    = &sync.Mutex{}
-	cfg               Config
+	cfg               *config.AppConfig
 	downloadSemaphore chan struct{}
 )
 
@@ -53,13 +48,11 @@ func main() {
 }
 
 func init() {
-	cfg, err := config.Parse("./config.yml")
+	var err error
+	cfg, err = config.Parse("./config.yml")
 	if err != nil {
 		log.Printf("Error reading config: %v. Using default values.", err)
-		cfg = &config.AppConfig{
-			MaxGlobalWorkers:   5,
-			MaxDownloadWorkers: 5,
-		}
+		cfg = config.DefaultConfig()
 		if err := cfg.Save("./config.yml"); err != nil {
 			log.Printf("Failed to write default config: %v", err)
 		}
@@ -157,43 +150,45 @@ func downloadHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"message": "Download(s) initiated"})
 }
 
-func processDownloadInternal(track map[string]interface{}) (*map[string]interface{}, error) {
-	resp := &map[string]interface{}{
+func processDownloadInternal(track map[string]interface{}) (map[string]interface{}, error) {
+	resp := map[string]interface{}{
 		"track":  track,
 		"status": "downloading",
 	}
 	trackURL, ok := track["url"].(string)
 	if !ok {
+		resp["status"] = "failed"
 		return resp, server.NewServerError(http.StatusBadRequest, "Invalid or missing URL in track data")
 	}
 
 	link, err := beatport.ParseUrl(trackURL)
 	if err != nil {
+		resp["status"] = "failed"
 		return resp, server.NewServerError(http.StatusBadRequest, fmt.Sprintf("Error parsing URL '%s': %v", trackURL, err))
 	}
 
 	log.Printf("Downloading %s with ID %d", link.Type, link.ID)
 
 	if link.Type != beatport.TrackLink {
-		(*resp)["status"] = "failed"
+		resp["status"] = "failed"
 		return resp, server.NewServerError(http.StatusBadRequest, fmt.Sprintf("Unsupported link type: %s", link.Type))
 	}
 
 	b := beatport.New(link.Store, "", nil)
 	trackInfo, err := b.GetTrack(link.ID)
 	if err != nil {
-		(*resp)["status"] = "failed"
+		resp["status"] = "failed"
 		return resp, server.NewServerError(http.StatusInternalServerError, fmt.Sprintf("Error getting track info: %v", err))
 	}
 
 	downloadInfo, err := b.DownloadTrack(link.ID, "lossless")
 	if err != nil {
-		(*resp)["status"] = "failed"
+		resp["status"] = "failed"
 		return resp, server.NewServerError(http.StatusInternalServerError, fmt.Sprintf("Error getting download URL: %v", err))
 	}
 
 	if downloadInfo == nil || downloadInfo.Location == "" {
-		(*resp)["status"] = "failed"
+		resp["status"] = "failed"
 		return resp, server.NewServerError(http.StatusInternalServerError, "Empty download URL")
 	}
 
@@ -202,13 +197,13 @@ func processDownloadInternal(track map[string]interface{}) (*map[string]interfac
 	httpClient := &http.Client{}
 	getResp, err := httpClient.Get(downloadURL)
 	if err != nil {
-		(*resp)["status"] = "failed"
+		resp["status"] = "failed"
 		return resp, server.NewServerError(http.StatusInternalServerError, fmt.Sprintf("Error during download: %v", err))
 	}
 	defer getResp.Body.Close()
 
 	if getResp.StatusCode != http.StatusOK {
-		(*resp)["status"] = "failed"
+		resp["status"] = "failed"
 		return resp, server.NewServerError(getResp.StatusCode, fmt.Sprintf("Download failed with status code: %d", getResp.StatusCode))
 	}
 
@@ -217,7 +212,7 @@ func processDownloadInternal(track map[string]interface{}) (*map[string]interfac
 	filePath := filepath.Join(tempDir, filename)
 	outFile, err := os.Create(filePath)
 	if err != nil {
-		(*resp)["status"] = "failed"
+		resp["status"] = "failed"
 		return resp, server.NewServerError(http.StatusInternalServerError, fmt.Sprintf("Error creating file: %v", err))
 	}
 
@@ -237,7 +232,7 @@ func processDownloadInternal(track map[string]interface{}) (*map[string]interfac
 				if err == nil {
 					err = fmt.Errorf("short write: wrote %d, expected %d", written, n)
 				}
-				(*resp)["status"] = "failed"
+				resp["status"] = "failed"
 				return resp, server.NewServerError(http.StatusInternalServerError, fmt.Sprintf("Error writing to file: %v", err))
 			}
 			downloadedBytes += int64(n)
@@ -247,7 +242,7 @@ func processDownloadInternal(track map[string]interface{}) (*map[string]interfac
 				if percent-lastReportedPercent >= 10 {
 					lastReportedPercent = percent
 					log.Printf("Download progress: %d%%", percent)
-					(*resp)["progress"] = percent
+					resp["progress"] = percent
 				}
 			}
 		}
@@ -255,45 +250,15 @@ func processDownloadInternal(track map[string]interface{}) (*map[string]interfac
 			break
 		}
 		if err != nil {
-			(*resp)["status"] = "failed"
-			return resp, server.NewServerError(http.StatusInternalServerError, fmt.Sprintf("Error during download: %v", err))
+			resp["status"] = "failed"
+			return resp, server.NewServerError(http.StatusInternalServerError, fmt.Sprintf("Error reading from response: %v", err))
 		}
 	}
-	defer outFile.Close()
 
-	log.Printf("Download complete for track ID %d. File temporarily saved to %s", trackInfo.ID, filePath)
-
-	newFilename := fmt.Sprintf("%s - %s.mp3", trackInfo.Artists.Display(100, ""), trackInfo.Name)
-	newFilename = regexp.MustCompile(`[^a-zA-Z0-9\s\-_.,()\[\]{}]`).ReplaceAllString(newFilename, "")
-
-	if newFilename == "" || len(newFilename) > 255 {
-		(*resp)["status"] = "failed"
-		return resp, server.NewServerError(http.StatusInternalServerError, fmt.Sprintf("Invalid filename generated: '%s'", newFilename))
-	}
-
-	downloadDir := "./downloads"
-	if _, err := os.Stat(downloadDir); os.IsNotExist(err) {
-		if err := os.MkdirAll(downloadDir, 0755); err != nil {
-			(*resp)["status"] = "failed"
-			return resp, server.NewServerError(http.StatusInternalServerError, fmt.Sprintf("Error creating downloads directory: %v", err))
-		}
-	}
-	newFilePath := filepath.Join(downloadDir, newFilename)
-
-	if err := os.Rename(filePath, newFilePath); err != nil {
-		(*resp)["status"] = "failed"
-		return resp, server.NewServerError(http.StatusInternalServerError, fmt.Sprintf("Error renaming and moving file: %v", err))
-	}
-	log.Printf("Renamed and moved file to: %s", newFilePath)
-
-	if err := os.Remove(filePath); err != nil {
-		log.Printf("Error deleting temporary file %s: %v", filePath, err)
-	}
-
-	log.Printf("File tagging would be implemented here for: %s", newFilePath)
+	log.Printf("File tagging would be implemented here for: %s", filePath)
 
 	resp["status"] = "completed"
-	resp["metadata"] = map[string]interface{}{"filename": newFilename, "path": newFilePath}
+	resp["metadata"] = map[string]interface{}{"filename": filename, "path": filePath}
 	return resp, nil
 }
 
@@ -319,24 +284,22 @@ func processDownload(downloadID string, track map[string]interface{}) {
 		} else {
 			status.Metadata["error"] = err.Error()
 		}
-		if resp != nil && resp["metadata"] != nil {
-			if _, ok := resp["metadata"].(map[string]interface{})["internal_error"]; !ok {
-				resp["metadata"].(map[string]interface{})["internal_error"] = err.Error()
+		if metadata, ok := resp["metadata"].(map[string]interface{}); ok {
+			if _, ok := metadata["internal_error"]; !ok {
+				metadata["internal_error"] = err.Error()
 			}
-		} else if resp != nil {
-			resp["metadata"] = map[string]interface{}{"internal_error": err.Error()}
 		} else {
-			resp = &map[string]interface{}{"metadata": map[string]interface{}{"internal_error": err.Error()}}
+			resp["metadata"] = map[string]interface{}{"internal_error": err.Error()}
 		}
 		status.Status = "failed"
-		if resp != nil {
-			status.Metadata["error"] = resp["metadata"]
+		if metadata, ok := resp["metadata"].(map[string]interface{}); ok {
+			status.Metadata = metadata
 		}
 		log.Printf("Download failed for %s: %v", status.TrackURL, status.Metadata["error"])
 	} else {
 		status.Status = "completed"
-		if resp != nil {
-			status.Metadata = resp["metadata"].(map[string]interface{})
+		if metadata, ok := resp["metadata"].(map[string]interface{}); ok {
+			status.Metadata = metadata
 		}
 		log.Printf("Download completed for %s", status.TrackURL)
 	}

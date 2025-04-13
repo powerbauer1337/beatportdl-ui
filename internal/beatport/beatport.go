@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"time"
@@ -129,10 +130,10 @@ func (b *Beatport) fetch(method, endpoint string, payload interface{}, contentTy
 			b.auth.Invalidate()
 			return b.fetch(method, endpoint, payload, contentType)
 		}
-		body, _ := readResponseBody(resp)
+		body, err := readResponseBody(resp)
 		resp.Body.Close()
 		message := fmt.Sprintf("request failed with status code: %d", resp.StatusCode)
-		if body != "" {
+		if err == nil && body != "" {
 			message += fmt.Sprintf(", response body: %s", body)
 		}
 		return nil, &ServerError{Code: resp.StatusCode, Message: message}
@@ -158,13 +159,13 @@ func encodeFormPayload(payload interface{}) (url.Values, error) {
 	return values, nil
 }
 
-func readResponseBody(resp *http.Response) string {
+func readResponseBody(resp *http.Response) (string, error) {
 	if resp == nil || resp.Body == nil {
-		return ""
+		return "", nil
 	}
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return ""
+		return "", err
 	}
-	return string(bodyBytes)
+	return string(bodyBytes), nil
 }
