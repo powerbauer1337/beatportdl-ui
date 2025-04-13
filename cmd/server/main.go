@@ -20,6 +20,7 @@ var downloadsMutex = &sync.Mutex{}
 func main() {
 	http.HandleFunc("/download", downloadHandler)
 	http.HandleFunc("/config", configHandler)
+	http.HandleFunc("/status", statusHandler)
 
 	fmt.Println("Server listening on port 8080")
 	if err := http.ListenAndServe(":8080", nil); err != nil {
@@ -31,13 +32,21 @@ func downloadHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
+
 	}
 
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
+		log.Printf("Error reading request body: %v", err)
 		http.Error(w, "Error reading request body", http.StatusBadRequest)
 		return
 	}
+
+	log.Printf("Received download request: %s", string(body))
+
+	defer r.Body.Close()
+
+
 
 	var data struct {
 		URLs []string `json:"urls"`
@@ -52,18 +61,25 @@ func downloadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	results := make([]*downloadStatus, len(data.URLs))
+	responses := make([]map[string]interface{}, 0, len(data.URLs))
+	hasError := false
+
 	for i, url := range data.URLs {
-		status := &downloadStatus{URL: url, Status: "pending"}
-		addDownload(status)
-		results[i] = status
-		go processDownload(status)
+		go func(url string) {
+			resp := processDownload(url)
+			responses = append(responses, resp)
+			if resp["error"] != nil {
+				hasError = true
+			}
+		}(url)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if hasErrors(results) {
+	if hasError {
 		w.WriteHeader(http.StatusInternalServerError)
+		log.Println("Download request resulted in errors")
 	} else {
+		log.Println("Download request processed successfully")
 		w.WriteHeader(http.StatusOK)
 	}
 
@@ -73,137 +89,139 @@ func downloadHandler(w http.ResponseWriter, r *http.Request) {
 
 }
 
-func addDownload(status *downloadStatus) {
-	downloadsMutex.Lock()
-	defer downloadsMutex.Unlock()
-	downloads[status.URL] = status
-}
+func processDownload(url string) map[string]interface{} {
+	resp := make(map[string]interface{})
+	resp["url"] = url
 
-func getDownload(url string) *downloadStatus {
-	downloadsMutex.Lock()
-	defer downloadsMutex.Unlock()
-	return downloads[url]
-}
-
-func updateDownloadStatus(url string, status string, errorMsg string) {
-	downloadsMutex.Lock()
-	defer downloadsMutex.Unlock()
-	if s, ok := downloads[url]; ok {
-		s.Status = status
-		s.Error = errorMsg
-	}
-}
-
-type downloadStatus struct {
-	URL    string `json:"url"`
-	Status string `json:"status"`
-	Error  string `json:"error,omitempty"`
-}
-
-func processDownload(status *downloadStatus) {
 	linkType, id, err := beatport.ParseUrl(url)
 	if err != nil {
-		updateDownloadStatus(status.URL, "failed", fmt.Sprintf("Error parsing URL: %v", err))
-		return
+		errMsg := fmt.Sprintf("Error parsing URL: %v", err)
+		resp["error"] = errMsg
+		log.Printf("Error processing download for URL %s: %s", url, errMsg)
+		return resp
 	}
 
-	// Implement the actual download logic here, using existing BeatportDL functions
-	// Example (replace with actual logic):
+	resp["status"] = "downloading"
+	log.Printf("Downloading %s with ID %s", linkType, id)
+
+	// Replace this with your actual download logic based on linkType
+	var downloadErr error
 	switch linkType {
 	case beatport.LinkTypeTrack:
-		updateDownloadStatus(status.URL, "downloading", "")
-		err := beatport.DownloadTrack(id) // Replace with actual BeatportDL function
-		if err != nil {
-			updateDownloadStatus(status.URL, "failed", fmt.Sprintf("Error downloading track: %v", err))
-			return
-		}
-		updateDownloadStatus(status.URL, "completed", "")
+		downloadErr = beatport.DownloadTrack(id)
+	case beatport.LinkTypeRelease:
+		// Assuming there's a DownloadRelease function
+		// downloadErr = beatport.DownloadRelease(id) 
+		downloadErr = fmt.Errorf("release downloads not yet supported")
 	default:
-		updateDownloadStatus(status.URL, "failed", fmt.Sprintf("Unsupported link type: %s", linkType))
+		downloadErr = fmt.Errorf("unsupported link type: %s", linkType)
 	}
-}
 
-func hasErrors(results []*downloadStatus) bool {
-	for _, result := range results {
-		if result.Status == "failed" {
-			return true
-		}
+	if downloadErr != nil {
+		errMsg := fmt.Sprintf("Error during download: %v", downloadErr)
+		resp["error"] = errMsg
+		resp["status"] = "failed"
+		log.Printf("Error downloading %s: %s", url, errMsg)
+	} else {
+		resp["status"] = "completed"
+		log.Printf("Successfully downloaded %s", url)
 	}
-	return false
+
+	return resp
 }
 
 func statusHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
+
 	}
 
-	downloadsMutex.Lock()
-	defer downloadsMutex.Unlock()
-
-	var statusResponse struct {
-		Total     int                      `json:"total"`
-		Downloads map[string]*downloadStatus `json:"downloads"`
-	}
-
-	statusResponse.Total = len(downloads)
-	statusResponse.Downloads = downloads
+	// Placeholder for actual status retrieval.
+	// In a real implementation, you'd track download statuses
+	// and return them here.  For now, we return a dummy response.
+	status := map[string]string{"status": "Endpoint not yet fully implemented"}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-
-	if err := json.NewEncoder(w).Encode(statusResponse); err != nil {
-		log.Println("Error encoding JSON response:", err)
+	if err := json.NewEncoder(w).Encode(status); err != nil {
+		log.Printf("Error encoding status response: %v", err)
+		http.Error(w, "Error encoding status", http.StatusInternalServerError)
+		return
 	}
+	log.Println("Returned download status")
 }
 
 func configHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		getConfig(w, r)
+		log.Println("Handled GET request to /config")
 	case http.MethodPut, http.MethodPost:
 		updateConfig(w, r)
+		log.Println("Handled PUT/POST request to /config")
 	default:
+		log.Printf("Method %s not allowed for /config", r.Method)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
 func getConfig(w http.ResponseWriter, r *http.Request) {
 	cfg, err := config.ReadConfig()
+
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Error reading config: %v", err), http.StatusInternalServerError)
+		errMsg := fmt.Sprintf("Error reading config: %v", err)
+		log.Println(errMsg)
+		http.Error(w, errMsg, http.StatusInternalServerError)
 		return
 	}
+
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 
 	if err := json.NewEncoder(w).Encode(cfg); err != nil {
-		log.Println("Error encoding JSON response:", err)
+		log.Printf("Error encoding config response: %v", err)
+		http.Error(w, "Error encoding config", http.StatusInternalServerError)
+		return
 	}
+
+	log.Println("Returned current configuration")
 }
 
 func updateConfig(w http.ResponseWriter, r *http.Request) {
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
+		log.Printf("Error reading config request body: %v", err)
 		http.Error(w, "Error reading request body", http.StatusBadRequest)
 		return
 	}
 
+	defer r.Body.Close()
+
+	log.Printf("Received config update request: %s", string(body))
+
+
+
 	var cfg config.Config
 	if err := yaml.Unmarshal(body, &cfg); err != nil {
-		http.Error(w, fmt.Sprintf("Error parsing config: %v", err), http.StatusBadRequest)
+
+		errMsg := fmt.Sprintf("Error parsing config: %v", err)
+		log.Println(errMsg)
+		http.Error(w, errMsg, http.StatusBadRequest)
 		return
 	}
 
+
 	if err := config.WriteConfig(cfg); err != nil {
-		http.Error(w, fmt.Sprintf("Error writing config: %v", err), http.StatusInternalServerError)
+		errMsg := fmt.Sprintf("Error writing config: %v", err)
+		log.Println(errMsg)
+		http.Error(w, errMsg, http.StatusInternalServerError)
 		return
 	}
+
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(map[string]string{"status": "config updated"}); err != nil {
-		log.Println("Error encoding JSON response:", err)
-	}
+	json.NewEncoder(w).Encode(map[string]string{"status": "config updated"})
+	log.Println("Configuration updated successfully")
 }
