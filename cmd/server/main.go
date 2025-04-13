@@ -7,9 +7,11 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"sync"
 
 	"github.com/your-username/your-repository/internal/beatport" // Replace with the actual path to the beatport package
-	"sync"
+	"github.com/your-username/your-repository/config"        // Replace with the actual path to the config package
+	"gopkg.in/yaml.v2"
 )
 
 var downloads = make(map[string]*downloadStatus)
@@ -17,6 +19,7 @@ var downloadsMutex = &sync.Mutex{}
 
 func main() {
 	http.HandleFunc("/download", downloadHandler)
+	http.HandleFunc("/config", configHandler)
 
 	fmt.Println("Server listening on port 8080")
 	if err := http.ListenAndServe(":8080", nil); err != nil {
@@ -150,6 +153,57 @@ func statusHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 
 	if err := json.NewEncoder(w).Encode(statusResponse); err != nil {
+		log.Println("Error encoding JSON response:", err)
+	}
+}
+
+func configHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		getConfig(w, r)
+	case http.MethodPut, http.MethodPost:
+		updateConfig(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func getConfig(w http.ResponseWriter, r *http.Request) {
+	cfg, err := config.ReadConfig()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error reading config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	if err := json.NewEncoder(w).Encode(cfg); err != nil {
+		log.Println("Error encoding JSON response:", err)
+	}
+}
+
+func updateConfig(w http.ResponseWriter, r *http.Request) {
+	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Error reading request body", http.StatusBadRequest)
+		return
+	}
+
+	var cfg config.Config
+	if err := yaml.Unmarshal(body, &cfg); err != nil {
+		http.Error(w, fmt.Sprintf("Error parsing config: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	if err := config.WriteConfig(cfg); err != nil {
+		http.Error(w, fmt.Sprintf("Error writing config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(map[string]string{"status": "config updated"}); err != nil {
 		log.Println("Error encoding JSON response:", err)
 	}
 }
