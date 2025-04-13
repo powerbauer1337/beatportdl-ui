@@ -49,11 +49,37 @@ function injectDownloadButton() {
     downloadButton.style.cursor = 'pointer';
 
     // Add click listener (implementation will be in later steps)
-    downloadButton.addEventListener('click', () => {
-      // Placeholder for download logic
+    downloadButton.addEventListener('click', async () => {
       const trackInfo = extractTrackInfo();
       if (trackInfo) {
-        console.log('Track information:', trackInfo);
+        try {
+          const response = await fetch('http://localhost:8080/download', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ tracks: [trackInfo] }),
+          });
+
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+
+          const data = await response.json();
+          console.log('Download request sent:', data);
+          // Provide feedback to the user (e.g., change button text)
+          downloadButton.textContent = 'Download Started...';
+        } catch (error) {
+          console.error('Error sending download request:', error);
+          // Display an error message to the user
+          const errorMessage = document.createElement('div');
+          errorMessage.textContent = 'Download Failed: ' + error.message;
+          errorMessage.style.color = 'red';
+          errorMessage.style.marginTop = '5px';
+          downloadButton.parentNode.insertBefore(errorMessage, downloadButton.nextSibling);
+          // Optionally, allow the user to retry
+          downloadButton.textContent = 'Retry Download';
+        }
       } else {
         console.error('Failed to extract track information.');
       }
