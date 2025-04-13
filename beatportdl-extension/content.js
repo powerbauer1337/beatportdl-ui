@@ -174,7 +174,7 @@ function injectDownloadButton() {
               handleDownloadError('Download Failed: Server not responding.', true);
               clearInterval(intervalId);
             }
-          }, 2000);
+          }, 1000);
 
           // Timeout for polling
           setTimeout(() => {
