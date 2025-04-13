@@ -9,12 +9,13 @@ import (
 	"net/http"
 
 	"github.com/your-username/your-repository/internal/beatport" // Replace with the actual path to the beatport package
+	"sync"
 )
 
+var downloads = make(map[string]*downloadStatus)
+var downloadsMutex = &sync.Mutex{}
+
 func main() {
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintln(w, "Hello, World!")
-	})
 	http.HandleFunc("/download", downloadHandler)
 
 	fmt.Println("Server listening on port 8080")
@@ -48,9 +49,12 @@ func downloadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	results := make([]downloadResult, len(data.URLs))
+	results := make([]*downloadStatus, len(data.URLs))
 	for i, url := range data.URLs {
-		results[i] = processDownload(url)
+		status := &downloadStatus{URL: url, Status: "pending"}
+		addDownload(status)
+		results[i] = status
+		go processDownload(status)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -63,46 +67,89 @@ func downloadHandler(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(results); err != nil {
 		log.Println("Error encoding JSON response:", err)
 	}
+
 }
 
-type downloadResult struct {
+func addDownload(status *downloadStatus) {
+	downloadsMutex.Lock()
+	defer downloadsMutex.Unlock()
+	downloads[status.URL] = status
+}
+
+func getDownload(url string) *downloadStatus {
+	downloadsMutex.Lock()
+	defer downloadsMutex.Unlock()
+	return downloads[url]
+}
+
+func updateDownloadStatus(url string, status string, errorMsg string) {
+	downloadsMutex.Lock()
+	defer downloadsMutex.Unlock()
+	if s, ok := downloads[url]; ok {
+		s.Status = status
+		s.Error = errorMsg
+	}
+}
+
+type downloadStatus struct {
 	URL    string `json:"url"`
 	Status string `json:"status"`
 	Error  string `json:"error,omitempty"`
 }
 
-func processDownload(url string) downloadResult {
-	result := downloadResult{URL: url}
+func processDownload(status *downloadStatus) {
 	linkType, id, err := beatport.ParseUrl(url)
 	if err != nil {
-		result.Status = "failed"
-		result.Error = fmt.Sprintf("Error parsing URL: %v", err)
-		return result
+		updateDownloadStatus(status.URL, "failed", fmt.Sprintf("Error parsing URL: %v", err))
+		return
 	}
 
 	// Implement the actual download logic here, using existing BeatportDL functions
 	// Example (replace with actual logic):
 	switch linkType {
 	case beatport.LinkTypeTrack:
-		result.Status = "started"
-		// Call BeatportDL's DownloadTrack function here, e.g.:
-		// if err := beatport.DownloadTrack(id); err != nil {
-		// 	result.Status = "failed"
-		// 	result.Error = fmt.Sprintf("Error downloading track: %v", err)
-		// }
+		updateDownloadStatus(status.URL, "downloading", "")
+		err := beatport.DownloadTrack(id) // Replace with actual BeatportDL function
+		if err != nil {
+			updateDownloadStatus(status.URL, "failed", fmt.Sprintf("Error downloading track: %v", err))
+			return
+		}
+		updateDownloadStatus(status.URL, "completed", "")
 	default:
-		result.Status = "failed"
-		result.Error = fmt.Sprintf("Unsupported link type: %s", linkType)
+		updateDownloadStatus(status.URL, "failed", fmt.Sprintf("Unsupported link type: %s", linkType))
 	}
-
-	return result
 }
 
-func hasErrors(results []downloadResult) bool {
+func hasErrors(results []*downloadStatus) bool {
 	for _, result := range results {
 		if result.Status == "failed" {
 			return true
 		}
 	}
 	return false
+}
+
+func statusHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	downloadsMutex.Lock()
+	defer downloadsMutex.Unlock()
+
+	var statusResponse struct {
+		Total     int                      `json:"total"`
+		Downloads map[string]*downloadStatus `json:"downloads"`
+	}
+
+	statusResponse.Total = len(downloads)
+	statusResponse.Downloads = downloads
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	if err := json.NewEncoder(w).Encode(statusResponse); err != nil {
+		log.Println("Error encoding JSON response:", err)
+	}
 }
