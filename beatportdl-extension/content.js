@@ -69,7 +69,7 @@ function injectControls() {
       const jsonData = JSON.stringify(tracksWithInfo, null, 2); // JSON-String mit Formatierung
       navigator.clipboard.writeText(jsonData) // JSON-Daten kopieren
         .then(() => {
-          console.log('Track data copied to clipboard!');
+          showNotification('Track data copied to clipboard!');
           alert('Track data copied to clipboard!');
         })
         .catch(err => {
@@ -91,7 +91,7 @@ function injectControls() {
       const tracksWithInfo = Array.from(selectedTracks).map(url => ({ url, ...trackInfoMap.get(url) }));
       sendToLocalServer(tracksWithInfo); // Daten an den Server senden
     } else {
-      console.log('No tracks selected.');
+      showNotification('No tracks selected.');
       alert('No tracks selected.');
     }
   });
@@ -108,24 +108,52 @@ function injectControls() {
 }
 
   // Function to send data to the local server
+  function showNotification(message) {
+    let notificationDiv = document.getElementById('beatportdl-notification');
+    if (!notificationDiv) {
+      notificationDiv = document.createElement('div');
+      notificationDiv.id = 'beatportdl-notification';
+      notificationDiv.style.cssText = `
+        position: fixed;
+        bottom: 20px;
+        left: 20px;
+        background-color: #333;
+        color: white;
+        padding: 10px 20px;
+        border-radius: 5px;
+        z-index: 1000;
+        display: none; /* Initially hidden */
+      `;
+      document.body.appendChild(notificationDiv);
+    }
+    notificationDiv.textContent = message;
+    notificationDiv.style.display = 'block';
+    setTimeout(() => { notificationDiv.style.display = 'none'; }, 5000); // Hide after 5 seconds
+  }
   function sendToLocalServer(tracks) {
-    fetch('http://localhost:3000/download', { // Angepasste URL
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(tracks)
-    })
-    .then(response => response.json()) // Antwort als JSON parsen
-    .then(data => {
-      if (data.success) {
-        alert(data.message); // Erfolgsmeldung aus der Serverantwort
-      } else {
-        alert(`Fehler: ${data.message}`); // Fehlermeldung aus der Serverantwort
-      }
-    })
-    .catch(error => {
-      alert('Server nicht erreichbar: ' + error);
+    chrome.storage.local.get({ serverUrl: 'http://localhost:8080/download' }, function(items) {
+      const serverUrl = items.serverUrl;
+      fetch(serverUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ tracks }) // Ensure the server expects "tracks"
+      })
+      .then(response => {
+        if (!response.ok) {
+          throw new Error('Network response was not ok ' + response.statusText);
+        }
+        return response.json();
+      })
+      .then(data => {
+        // Assuming server returns an array of results, handle each
+        /* data.forEach(result => {
+          const message = result.error ? `Fehler für ${result.track.url}: ${result.error}` : `Erfolgreich: ${result.track.url}`;
+          alert(message); // Consider a more user-friendly notification
+        }); */
+      })
+      .catch(error => alert('Server nicht erreichbar oder Fehler: ' + error));
     });
   }
 
@@ -152,28 +180,36 @@ console.log('Beatport Download Helper content script loaded.');
 function extractTrackInfo(trackElement) { // Übergabe des Track-Elements
   try {
     const track = {};
-
-    // JSON-Extraktion (angepasst auf das spezifische Track-Element)
     let data;
-    const scripts = trackElement.querySelectorAll('script'); // Nur Skripte innerhalb des Track-Elements
-    for (const script of scripts) {
-      if (script.textContent.includes('window.Playables')) {
-        const jsonStr = script.textContent.match(/window.Playabless*=s*({.*?});/)?.[1];
-        if (jsonStr) {
-          data = JSON.parse(jsonStr);
-          track.id = data?.tracks?.[0]?.id;
-          track.title = data?.tracks?.[0]?.name;
-          track.artists = data?.tracks?.[0]?.artists?.map(a => a.name).join(', ');
-        }
-        break;
+
+    // Improved JSON Extraction
+    const jsonScript = trackElement.querySelector('script[data-testid="playable-track"]'); // Replace with a more specific selector if available
+    if (jsonScript) {
+      try {
+        data = JSON.parse(jsonScript.textContent);
+        track.id = data?.tracks?.[0]?.id;
+        track.title = data?.tracks?.[0]?.name;
+        track.artists = data?.tracks?.[0]?.artists?.map(a => a.name).join(', ');
+      } catch (jsonError) {
+        console.error('JSON parsing error:', jsonError);
+        // Fallback to DOM extraction or handle the error as needed
       }
     }
 
-    // DOM-Extraktion (Fallback, ebenfalls angepasst)
-    if (!data || !track.title || !track.artists || !track.id) {
-      track.title = track.title || trackElement.querySelector('.ec-item__title')?.textContent.trim();
-      track.artists = track.artists || trackElement.querySelector('.ec-item__artists')?.textContent.trim();
-      track.id = track.id || trackElement.querySelector('[data-ec-id]')?.dataset.ecId;
+    // DOM Extraction (Fallback)
+    if (!data || !track.id || !track.title || !track.artists) {
+      try {
+        track.title = track.title || trackElement.querySelector('[data-testid="track-title"]')?.textContent.trim() ||
+                      trackElement.querySelector('a[data-qa-id="track-title"]')?.textContent.trim() ||
+                      trackElement.querySelector('a span')?.textContent.trim();
+        track.artists = track.artists || trackElement.querySelector('[data-testid="track-artist"]')?.textContent.trim() ||
+                        trackElement.querySelector('a[data-qa-id="artist-name"]')?.textContent.trim() ||
+                        trackElement.querySelector('div a')?.textContent.trim();
+        track.id = track.id || trackElement.querySelector('[data-ec-id]')?.dataset.ecId;
+      } catch (domError) {
+        console.error('DOM extraction error:', domError);
+        // Handle the error as needed
+      }
     }
 
     return track.id && track.title && track.artists ? track : null;
@@ -181,4 +217,3 @@ function extractTrackInfo(trackElement) { // Übergabe des Track-Elements
     console.error('Fehler bei der Track-Extraktion:', error);
     return null;
   }
-}

@@ -2,16 +2,18 @@
   "manifest_version": 3,
   "name": "Beatport Download Helper",
   "version": "0.1.0",
-  "description": "Ermöglicht die Auswahl von Tracks auf Beatport und das Herunterladen mit beatportdl.",
+  "description": "__MSG_extensionDescription__",
   "permissions": [
     "activeTab",
     "scripting",
-    "clipboardWrite"
+    "clipboardWrite",
+    "storage"
   ],
   "content_scripts": [
     {
       "matches": ["https://www.beatport.com/*"],
       "js": ["content.js"]
     }
-  ]
+  ],
+  "options_page": "options.html"
 }

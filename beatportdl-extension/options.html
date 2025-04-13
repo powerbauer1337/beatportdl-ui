@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Beatport Download Helper Options</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      width: 300px;
+      padding: 20px;
+    }
+    label {
+      display: block;
+      margin-bottom: 5px;
+    }
+    input[type="text"] {
+      width: 100%;
+      padding: 8px;
+      margin-bottom: 10px;
+      border: 1px solid #ccc;
+      box-sizing: border-box;
+    }
+    button {
+      background-color: #4CAF50;
+      color: white;
+      padding: 10px 15px;
+      border: none;
+      cursor: pointer;
+    }
+    #status {
+      margin-top: 10px;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <h1>Beatport Download Helper Options</h1>
+  <label for="serverUrl">Server URL:</label>
+  <input type="text" id="serverUrl" name="serverUrl">
+  <button id="save">Save</button>
+  <div id="status"></div>
+
+  <script>
+    function saveOptions() {
+      const serverUrl = document.getElementById('serverUrl').value;
+      chrome.storage.local.set({
+        serverUrl: serverUrl
+      }, function() {
+        const status = document.getElementById('status');
+        status.textContent = 'Options saved.';
+        setTimeout(function() {
+          status.textContent = '';
+        }, 2000);
+      });
+    }
+
+    function restoreOptions() {
+      chrome.storage.local.get({
+        serverUrl: 'http://localhost:8080' // Default value
+      }, function(items) {
+        document.getElementById('serverUrl').value = items.serverUrl;
+      });
+    }
+
+    document.addEventListener('DOMContentLoaded', restoreOptions);
+    document.getElementById('save').addEventListener('click', saveOptions);
+  </script>
+</body>
+</html>
