@@ -90,20 +90,49 @@ func downloadHandler2(w http.ResponseWriter, r *http.Request) {
 	responses := make([]map[string]interface{}, 0, len(data.Tracks)) // Initialize with capacity
     for _, track := range data.Tracks {
         id := uuid.New().String()
-        url, ok := track["url"].(string)
-        if !ok {
-			responses = append(responses, map[string]interface{}{"error": "invalid or missing url in track data"})
-            continue
-        }
+		// Extract URL
+		url, urlOK := track["url"].(string)
+		if !urlOK {
+			responses = append(responses, map[string]interface{}{"error": "missing or invalid 'url' in track data"})
+			continue
+		}
+
 		// Validate URL format
 		if !beatportURLPattern.MatchString(url) {
 			responses = append(responses, map[string]interface{}{"error": fmt.Sprintf("invalid Beatport URL format: %s", url)})
-            continue
-        }
+			continue
+		}
 
-        downloadsMutex.Lock()
-        downloads[id] = &downloadStatus{TrackURL: url, Status: "pending", Metadata: track}
-        downloadsMutex.Unlock()
+		// Extract other metadata with type checking
+		trackID, idOK := track["id"].(string)
+		if !idOK {
+			responses = append(responses, map[string]interface{}{"error": "missing or invalid 'id' in track data"})
+			continue
+		}
+
+		title, titleOK := track["title"].(string)
+		if !titleOK {
+			responses = append(responses, map[string]interface{}{"error": "missing or invalid 'title' in track data"})
+			continue
+		}
+
+		artists, artistsOK := track["artists"].(string)
+		if !artistsOK {
+			responses = append(responses, map[string]interface{}{"error": "missing or invalid 'artists' in track data"})
+			continue
+		}
+
+		downloadsMutex.Lock()
+		downloads[id] = &downloadStatus{
+			TrackURL: url,
+			Status:   "pending",
+			Metadata: map[string]interface{}{
+				"id":      trackID,
+				"title":   title,
+				"artists": artists,
+			},
+		}
+		downloadsMutex.Unlock()
 
         downloadSemaphore <- struct{}{}
         go processDownload(id, track)

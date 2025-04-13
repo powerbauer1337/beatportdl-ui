@@ -131,7 +131,7 @@ function injectControls() {
     setTimeout(() => { notificationDiv.style.display = 'none'; }, 5000); // Hide after 5 seconds
   }
   function sendToLocalServer(tracks) {
-    chrome.storage.local.get({ serverUrl: 'http://localhost:8080/download' }, function(items) {
+    chrome.storage.local.get({ serverUrl: 'http://localhost:3000/download' }, function(items) {
       const serverUrl = items.serverUrl;
       fetch(serverUrl, {
         method: 'POST',
