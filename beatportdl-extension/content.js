@@ -38,15 +38,59 @@ function injectDownloadButton() {
     const downloadButton = document.createElement('button');
     downloadButton.textContent = 'Download Track';
     downloadButton.style.marginTop = '10px';
-    downloadButton.id = 'beatportdl-download-button';
+    downloadButton.id = 'beatportdl-download-button'; // Keep the ID
 
     // Basic styling to match Beatport's design (adjust as needed)
-    downloadButton.style.backgroundColor = '#e20074'; /* Beatport pink */
+    downloadButton.style.backgroundColor = '#e20074'; // Beatport pink
     downloadButton.style.color = 'white';
     downloadButton.style.border = 'none';
     downloadButton.style.padding = '8px 15px';
     downloadButton.style.borderRadius = '4px';
     downloadButton.style.cursor = 'pointer';
+
+    // Add spinner element
+    const spinner = document.createElement('span');
+    spinner.className = 'beatportdl-spinner';
+    spinner.style.display = 'none'; // Initially hidden
+    spinner.style.marginLeft = '5px';
+    downloadButton.appendChild(spinner);
+
+    // Add retry button (initially hidden)
+    const retryButton = document.createElement('button');
+    retryButton.textContent = 'Retry Download';
+    retryButton.style.display = 'none'; // Initially hidden
+    retryButton.style.marginLeft = '10px';
+    retryButton.style.backgroundColor = '#e20074';
+    retryButton.style.color = 'white';
+    retryButton.style.border = 'none';
+    retryButton.style.padding = '8px 15px';
+    retryButton.style.borderRadius = '4px';
+    retryButton.style.cursor = 'pointer';
+
+    // Container for button and retry
+    const buttonContainer = document.createElement('div');
+    buttonContainer.style.marginTop = '10px';
+    buttonContainer.appendChild(downloadButton);
+    buttonContainer.appendChild(retryButton);
+
+
+    // Add CSS for the spinner (injected into the page)
+    const style = document.createElement('style');
+    style.textContent = `
+      .beatportdl-spinner {
+        border: 3px solid rgba(255, 255, 255, 0.3);
+        border-radius: 50%;
+        border-top: 3px solid white;
+        width: 16px;
+        height: 16px;
+        animation: spin 1s linear infinite;
+      }
+      @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+    `;
+    document.head.appendChild(style);
 
     // Add click listener
     downloadButton.addEventListener('click', async () => {
@@ -54,6 +98,7 @@ function injectDownloadButton() {
       if (trackInfo) {
         // Change button text and disable
         downloadButton.textContent = 'Preparing Download...';
+        spinner.style.display = 'inline-block';
         downloadButton.disabled = true;
 
         // Send download request
@@ -79,9 +124,10 @@ function injectDownloadButton() {
 
           } catch (error) {
             console.error('Error sending download request:', error);
-            // Display an error message to the user
-            downloadButton.textContent = 'Download Failed: ' + error.message;
-            downloadButton.disabled = false;
+            downloadButton.textContent = 'Download Failed';
+            spinner.style.display = 'none';
+            downloadButton.style.display = 'none';
+            retryButton.style.display = 'inline-block';
           }
         };
 
@@ -107,15 +153,21 @@ function injectDownloadButton() {
                 const error = downloadStatus.Metadata?.error;
 
                 if (status === 'downloading') {
-                  downloadButton.textContent = 'Downloading...';
+                  downloadButton.textContent = 'Downloading';
                 } else if (status === 'completed') {
-                  downloadButton.textContent = 'Download Complete!';
-                  clearInterval(intervalId); // Stop polling
+                  downloadButton.textContent = 'Download Complete';
+                  spinner.style.display = 'none';
+                  clearInterval(intervalId);
                   downloadButton.disabled = false;
                 } else if (status === 'failed') {
                   downloadButton.textContent = `Download Failed: ${error || 'Unknown error'}`;
-                  clearInterval(intervalId); // Stop polling
+                  spinner.style.display = 'none';
+                  clearInterval(intervalId);
+                  // Show retry
+                  downloadButton.style.display = 'none';
+                  retryButton.style.display = 'inline-block';
                   downloadButton.disabled = false;
+
                 }
               }
             } catch (error) {
@@ -132,18 +184,27 @@ function injectDownloadButton() {
             downloadButton.textContent = 'Preparing Download...';
           }
         };
+
+        retryButton.addEventListener('click', () => {
+          retryButton.style.display = 'none'; // Hide retry
+          downloadButton.style.display = 'inline-block'; // Show main button
+          sendDownloadRequest(); // Retry download
+        });
+
       }
     });
 
     // Find a suitable location to insert the button (e.g., near the track title)
     const titleElement = document.querySelector('h1[itemprop="name"]'); // Adjust selector as needed
     if (titleElement && titleElement.parentNode) {
-      titleElement.parentNode.appendChild(downloadButton);
+      titleElement.parentNode.appendChild(buttonContainer);
     } else {
       console.error('Could not find track title element.');
       // Fallback: Add to the end of the body (for debugging/testing)
-      document.body.appendChild(downloadButton);
+      document.body.appendChild(buttonContainer);
     }
+
+
   }
 }
 
