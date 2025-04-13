@@ -143,7 +143,7 @@ func downloadHandler2(w http.ResponseWriter, r *http.Request) {
     json.NewEncoder(w).Encode(map[string]string{"message": "Download(s) initiated"})
 }
 
-func processDownloadInternal(track map[string]interface{}) map[string]interface{} {
+func processDownloadInternal(track map[string]interface{}) (map[string]interface{}, error) {
 	resp := make(map[string]interface{})
 	resp["track"] = track // Include the full track info in the response
 	url, ok := track["url"].(string)
@@ -161,22 +161,84 @@ func processDownloadInternal(track map[string]interface{}) map[string]interface{
 	resp["status"] = "downloading" // Use string constants for statuses
 	log.Printf("Downloading %s with ID %s", linkType, id)
 
-	// Replace this with your actual download logic based on linkType
-	var downloadErr error
-	switch linkType {
-	case beatport.LinkTypeTrack:
-		downloadErr = beatport.DownloadTrack(id) // Assuming beatport.DownloadTrack expects just the ID
-	default:
-		downloadErr = fmt.Errorf("unsupported link type '%s'", linkType)
-	}
-	if downloadErr != nil {
-		errMsg := fmt.Sprintf("Error during download: %v", downloadErr)
+	if linkType != beatport.LinkTypeTrack {
+    errMsg := fmt.Sprintf("Unsupported link type: %s", linkType)
 		resp["error"] = errMsg
-		resp["status"] = "failed" // Use string constants for statuses
-	} else {
-		resp["status"] = "completed" // Use string constants for statuses
+		resp["status"] = "failed"
+		return resp, fmt.Errorf(errMsg)
 	}
-	return resp
+
+	trackID, err := strconv.ParseInt(id, 10, 64)
+	if err != nil {
+		errMsg := fmt.Sprintf("Invalid track ID: %s", id)
+		resp["error"] = errMsg
+		resp["status"] = "failed"
+		return resp, fmt.Errorf(errMsg)
+	}
+
+	b := beatport.New(nil, "", nil) // Assuming a basic Beatport client is sufficient here
+	downloadInfo, err := b.DownloadTrack(trackID, "lossless") // Assuming a basic Beatport client
+	if err != nil {
+		errMsg := fmt.Sprintf("Error getting download URL: %v", err)
+		resp["error"] = errMsg
+		resp["status"] = "failed"
+		return resp, fmt.Errorf(errMsg)
+	}
+
+	if downloadInfo == nil || downloadInfo.Location == "" {
+		errMsg := "Empty download URL"
+		resp["error"] = errMsg
+		resp["status"] = "failed"
+		return resp, fmt.Errorf(errMsg)
+	}
+
+	// Download the file
+	downloadURL := downloadInfo.Location
+	log.Printf("Downloading from URL: %s", downloadURL)
+
+	httpClient := &http.Client{}
+	getResp, err := httpClient.Get(downloadURL)
+	if err != nil {
+		errMsg := fmt.Sprintf("Error during download: %v", err)
+		resp["error"] = errMsg
+		resp["status"] = "failed"
+		return resp, fmt.Errorf(errMsg)
+	}
+	defer getResp.Body.Close()
+
+	if getResp.StatusCode != http.StatusOK {
+		errMsg := fmt.Sprintf("Download failed with status code: %d", getResp.StatusCode)
+		resp["error"] = errMsg
+		resp["status"] = "failed"
+		return resp, fmt.Errorf(errMsg)
+	}
+
+	// Store the file temporarily
+	filename := fmt.Sprintf("%d.temp", trackID)
+	tempDir := "/tmp" //In a real production app, make sure this directory exists and is writable.
+	filePath := filepath.Join(tempDir, filename)
+
+	outFile, err := os.Create(filePath)
+	if err != nil {
+		errMsg := fmt.Sprintf("Error creating file: %v", err)
+		resp["error"] = errMsg
+		resp["status"] = "failed"
+		return resp, fmt.Errorf(errMsg)
+	}
+	defer outFile.Close()
+
+	_, err = io.Copy(outFile, getResp.Body)
+	if err != nil {
+		errMsg := fmt.Sprintf("Error saving download: %v", err)
+		resp["error"] = errMsg
+		resp["status"] = "failed"
+		return resp, fmt.Errorf(errMsg)
+	}
+
+	log.Printf("Download complete for track ID %d. File saved to %s", trackID, filePath)
+	resp["status"] = "completed"
+	resp["metadata"] = map[string]interface{}{ "filename": filename, "path": filePath }
+	return resp, nil
 }
 
 func processDownload(downloadID string, track map[string]interface{}) {
@@ -192,12 +254,22 @@ func processDownload(downloadID string, track map[string]interface{}) {
     status.Status = "downloading"
     downloadsMutex.Unlock()
 
-    resp := processDownloadInternal(track)
+    resp, err := processDownloadInternal(track)
+	if err != nil {
+		log.Printf("processDownloadInternal error: %v", err)
+		// resp already contains error details, no need to modify it here.
+	}
 
     downloadsMutex.Lock()
     defer downloadsMutex.Unlock()
 
     if resp["error"] != nil {
+		if resp["metadata"] == nil {
+			resp["metadata"] = make(map[string]interface{})
+		}
+		if err != nil {
+			resp["metadata"].(map[string]interface{})["internal_error"] = err.Error() //Add stack trace or other debugging info here
+		}
         status.Status = "failed"
 		status.Metadata["error"] = resp["error"]
         log.Printf("Download failed for %s: %v", status.TrackURL, resp["error"])
