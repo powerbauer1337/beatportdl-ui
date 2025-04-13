@@ -22,9 +22,13 @@ type Beatport struct {
 	auth    *Auth
 }
 
-type FetcherError struct {
-	Detail *string `json:"detail,omitempty"`
-	Error  *string `json:"error,omitempty"`
+type ServerError struct {
+	Code    int
+	Message string
+}
+
+func (e *ServerError) Error() string {
+	return fmt.Sprintf("code: %d, message: %s", e.Code, e.Message)
 }
 
 type Paginated[T any] struct {
@@ -77,7 +81,7 @@ func (b *Beatport) fetch(method, endpoint string, payload interface{}, contentTy
 		switch contentType {
 		case "application/json":
 			if err := json.NewEncoder(&body).Encode(payload); err != nil {
-				return nil, fmt.Errorf("failed to encode json payload: %w", err)
+				return nil, &ServerError{Code: http.StatusBadRequest, Message: fmt.Sprintf("failed to encode json payload: %v", err)}
 			}
 		case "application/x-www-form-urlencoded":
 			formData, err := encodeFormPayload(payload)
@@ -86,7 +90,7 @@ func (b *Beatport) fetch(method, endpoint string, payload interface{}, contentTy
 			}
 			body.WriteString(formData.Encode())
 		default:
-			return nil, fmt.Errorf("unsupported content type: %s", contentType)
+			return nil, &ServerError{Code: http.StatusBadRequest, Message: fmt.Sprintf("unsupported content type: %s", contentType)}
 		}
 	}
 
@@ -100,7 +104,7 @@ func (b *Beatport) fetch(method, endpoint string, payload interface{}, contentTy
 
 	req, err := http.NewRequest(method, baseUrl+endpoint, &body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, &ServerError{Code: http.StatusInternalServerError, Message: fmt.Sprintf("failed to create request: %v", err)}
 	}
 
 	for key, value := range b.headers {
@@ -117,7 +121,7 @@ func (b *Beatport) fetch(method, endpoint string, payload interface{}, contentTy
 
 	resp, err := b.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
+		return nil, &ServerError{Code: http.StatusInternalServerError, Message: fmt.Sprintf("request failed: %v", err)}
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusFound {
@@ -125,22 +129,13 @@ func (b *Beatport) fetch(method, endpoint string, payload interface{}, contentTy
 			b.auth.Invalidate()
 			return b.fetch(method, endpoint, payload, contentType)
 		}
-		defer resp.Body.Close()
-		response := &FetcherError{}
-		if err = json.NewDecoder(resp.Body).Decode(response); err == nil {
-			detail := "Unknown error"
-			if response.Detail != nil {
-				detail = *response.Detail
-			} else if response.Error != nil {
-				detail = *response.Error
-			}
-			return nil, fmt.Errorf(
-				"request failed with status code: %d - %s",
-				resp.StatusCode,
-				detail,
-			)
+		body, _ := readResponseBody(resp)
+		resp.Body.Close()
+		message := fmt.Sprintf("request failed with status code: %d", resp.StatusCode)
+		if body != "" {
+			message += fmt.Sprintf(", response body: %s", body)
 		}
-		return nil, fmt.Errorf("request failed with status code: %d", resp.StatusCode)
+		return nil, &ServerError{Code: resp.StatusCode, Message: message}
 	}
 
 	return resp, nil
@@ -161,4 +156,15 @@ func encodeFormPayload(payload interface{}) (url.Values, error) {
 	}
 
 	return values, nil
+}
+
+func readResponseBody(resp *http.Response) string {
+	if resp == nil || resp.Body == nil {
+		return ""
+	}
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return ""
+	}
+	return string(bodyBytes)
 }

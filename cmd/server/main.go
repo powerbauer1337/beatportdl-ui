@@ -8,9 +8,13 @@ import (
 	"io/ioutil"
 	"net/http"
 	"sync"
+	"os"
+	"path/filepath"
 	"regexp"
+	"net/url"
 	"github.com/google/uuid"
 
+	"github.com/your-username/your-repository/internal/server"
 	"github.com/your-username/your-repository/internal/beatport" // Replace with the actual path to the beatport package
 	"github.com/your-username/your-repository/config"        // Replace with the actual path to the config package
 	"gopkg.in/yaml.v2"
@@ -84,52 +88,54 @@ func downloadHandler2(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-	// Basic Beatport URL pattern check (improve as needed)
-	beatportURLPattern := regexp.MustCompile(`^https://www\.beatport\.com/(track|release)/[^/]+/[^/]+$`)
-
-	responses := make([]map[string]interface{}, 0, len(data.Tracks)) // Initialize with capacity
+	errorMessages := make([]string, 0)
     for _, track := range data.Tracks {
         id := uuid.New().String()
 		// Extract URL
 		url, urlOK := track["url"].(string)
 		if !urlOK {
-			responses = append(responses, map[string]interface{}{"error": "missing or invalid 'url' in track data"})
+			errorMessages = append(errorMessages, fmt.Sprintf("Track: missing or invalid 'url'"))
 			continue
 		}
 
-		// Validate URL format
-		if !beatportURLPattern.MatchString(url) {
-			responses = append(responses, map[string]interface{}{"error": fmt.Sprintf("invalid Beatport URL format: %s", url)})
+		// Validate and sanitize URL
+		parsedURL, err := url.Parse(url)
+		if err != nil {
+			errorMessages = append(errorMessages, fmt.Sprintf("Track: invalid URL format: %v", err))
+			continue
+		}
+		if parsedURL.Scheme != "https" || parsedURL.Host != "www.beatport.com" || (!regexp.MustCompile(`^/(track|release)/`).MatchString(parsedURL.Path)) {
+			errorMessages = append(errorMessages, fmt.Sprintf("Track: invalid Beatport URL: scheme must be 'https', host must be 'www.beatport.com', and path must start with '/track/' or '/release/'"))
 			continue
 		}
 
-		// Extract other metadata with type checking
-		trackID, idOK := track["id"].(string)
+		// Extract and sanitize other metadata with type checking
+		trackID, idOK := track["id"].(string) // Assuming ID is a string
 		if !idOK {
-			responses = append(responses, map[string]interface{}{"error": "missing or invalid 'id' in track data"})
+			errorMessages = append(errorMessages, fmt.Sprintf("Track: missing or invalid 'id'"))
 			continue
 		}
 
 		title, titleOK := track["title"].(string)
 		if !titleOK {
-			responses = append(responses, map[string]interface{}{"error": "missing or invalid 'title' in track data"})
+			errorMessages = append(errorMessages, fmt.Sprintf("Track with id '%s': missing or invalid 'title'", trackID)) // Use trackID if available
 			continue
 		}
 
 		artists, artistsOK := track["artists"].(string)
 		if !artistsOK {
-			responses = append(responses, map[string]interface{}{"error": "missing or invalid 'artists' in track data"})
+			errorMessages = append(errorMessages, fmt.Sprintf("Track with id '%s': missing or invalid 'artists'", trackID)) // Use trackID if available
 			continue
 		}
 
 		downloadsMutex.Lock()
 		downloads[id] = &downloadStatus{
-			TrackURL: url,
+			TrackURL:  parsedURL.String(), // Store the parsed and potentially modified URL
 			Status:   "pending",
 			Metadata: map[string]interface{}{
-				"id":      trackID,
-				"title":   title,
-				"artists": artists,
+				"id":      html.EscapeString(trackID),
+				"title":   html.EscapeString(title),
+				"artists": html.EscapeString(artists),
 			},
 		}
 		downloadsMutex.Unlock()
@@ -139,106 +145,181 @@ func downloadHandler2(w http.ResponseWriter, r *http.Request) {
 	}
 	
     w.Header().Set("Content-Type", "application/json")
-    w.WriteHeader(http.StatusAccepted) // Use 202 Accepted for async processing
-    json.NewEncoder(w).Encode(map[string]string{"message": "Download(s) initiated"})
+	if len(errorMessages) > 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string][]string{"errors": errorMessages})
+		return
+	}
+
+	w.WriteHeader(http.StatusAccepted) // Use 202 Accepted for async processing
+	json.NewEncoder(w).Encode(map[string]string{"message": "Download(s) initiated"})
 }
 
-func processDownloadInternal(track map[string]interface{}) (map[string]interface{}, error) {
-	resp := make(map[string]interface{})
-	resp["track"] = track // Include the full track info in the response
+func processDownloadInternal(track map[string]interface{}) (*map[string]interface{}, error) {
+	resp := &map[string]interface{}{
+		"track":  track, // Include the full track info
+		"status": "downloading",
+	}
 	url, ok := track["url"].(string)
 	if !ok {
-		return map[string]interface{}{"error": "invalid or missing url in track data"}
+		return resp, server.NewServerError(400, "Invalid or missing URL in track data")
 	}
 
 	linkType, id, err := beatport.ParseUrl(url)
 	if err != nil {
-		errMsg := fmt.Sprintf("Error parsing URL '%s': %v", url, err)
-		resp["error"] = errMsg
-		return resp
+		return resp, server.NewServerError(400, fmt.Sprintf("Error parsing URL '%s': %v", url, err))
 	}
 
-	resp["status"] = "downloading" // Use string constants for statuses
 	log.Printf("Downloading %s with ID %s", linkType, id)
 
 	if linkType != beatport.LinkTypeTrack {
-    errMsg := fmt.Sprintf("Unsupported link type: %s", linkType)
-		resp["error"] = errMsg
-		resp["status"] = "failed"
-		return resp, fmt.Errorf(errMsg)
+		(*resp)["status"] = "failed"
+		return resp, server.NewServerError(400, fmt.Sprintf("Unsupported link type: %s", linkType))
 	}
 
 	trackID, err := strconv.ParseInt(id, 10, 64)
 	if err != nil {
-		errMsg := fmt.Sprintf("Invalid track ID: %s", id)
-		resp["error"] = errMsg
-		resp["status"] = "failed"
-		return resp, fmt.Errorf(errMsg)
+		(*resp)["status"] = "failed"
+		return resp, server.NewServerError(400, fmt.Sprintf("Invalid track ID: %s", id))
 	}
 
 	b := beatport.New(nil, "", nil) // Assuming a basic Beatport client is sufficient here
 	downloadInfo, err := b.DownloadTrack(trackID, "lossless") // Assuming a basic Beatport client
 	if err != nil {
-		errMsg := fmt.Sprintf("Error getting download URL: %v", err)
-		resp["error"] = errMsg
-		resp["status"] = "failed"
-		return resp, fmt.Errorf(errMsg)
+		(*resp)["status"] = "failed"
+		return resp, server.NewServerError(500, fmt.Sprintf("Error getting download URL: %v", err))
 	}
 
 	if downloadInfo == nil || downloadInfo.Location == "" {
-		errMsg := "Empty download URL"
-		resp["error"] = errMsg
-		resp["status"] = "failed"
-		return resp, fmt.Errorf(errMsg)
+		(*resp)["status"] = "failed"
+		return resp, server.NewServerError(500, "Empty download URL")
 	}
 
 	// Download the file
 	downloadURL := downloadInfo.Location
 	log.Printf("Downloading from URL: %s", downloadURL)
-
 	httpClient := &http.Client{}
 	getResp, err := httpClient.Get(downloadURL)
 	if err != nil {
-		errMsg := fmt.Sprintf("Error during download: %v", err)
-		resp["error"] = errMsg
-		resp["status"] = "failed"
-		return resp, fmt.Errorf(errMsg)
+		(*resp)["status"] = "failed"
+		return resp, server.NewServerError(500, fmt.Sprintf("Error during download: %v", err))
 	}
 	defer getResp.Body.Close()
 
 	if getResp.StatusCode != http.StatusOK {
-		errMsg := fmt.Sprintf("Download failed with status code: %d", getResp.StatusCode)
-		resp["error"] = errMsg
-		resp["status"] = "failed"
-		return resp, fmt.Errorf(errMsg)
+		(*resp)["status"] = "failed"
+		return resp, server.NewServerError(getResp.StatusCode, fmt.Sprintf("Download failed with status code: %d", getResp.StatusCode))
 	}
 
 	// Store the file temporarily
 	filename := fmt.Sprintf("%d.temp", trackID)
-	tempDir := "/tmp" //In a real production app, make sure this directory exists and is writable.
+	tempDir := "/tmp"
 	filePath := filepath.Join(tempDir, filename)
-
 	outFile, err := os.Create(filePath)
 	if err != nil {
-		errMsg := fmt.Sprintf("Error creating file: %v", err)
-		resp["error"] = errMsg
-		resp["status"] = "failed"
-		return resp, fmt.Errorf(errMsg)
+		(*resp)["status"] = "failed"
+		return resp, server.NewServerError(500, fmt.Sprintf("Error creating file: %v", err))
+	}
+
+	// Get total file size for progress reporting
+	contentLength := getResp.ContentLength
+	if contentLength <= 0 {
+		log.Printf("Content length is not available for %s, progress updates will not be provided.", downloadURL)
+	}
+
+	// Track downloaded bytes and progress
+	downloadedBytes := int64(0)
+	lastReportedPercent := 0
+	buf := make([]byte, 32*1024) // 32KB buffer
+	for {
+		n, err := getResp.Body.Read(buf)
+		if n > 0 {
+			written, err := outFile.Write(buf[:n])
+			if err != nil || written < n {
+				if err == nil {
+					err = fmt.Errorf("short write: wrote %d, expected %d", written, n)
+				}
+				(*resp)["status"] = "failed"
+				return resp, server.NewServerError(500, fmt.Sprintf("Error writing to file: %v", err))
+			}
+			downloadedBytes += int64(n)
+
+			// Calculate and report progress
+			if contentLength > 0 {
+				percent := int(float64(downloadedBytes) / float64(contentLength) * 100)
+				if percent-lastReportedPercent >= 10 {
+					lastReportedPercent = percent
+					log.Printf("Download progress: %d%%", percent)
+					(*resp)["progress"] = percent // Update progress in response
+				}
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			(*resp)["status"] = "failed"
+			return resp, server.NewServerError(500, fmt.Sprintf("Error during download: %v", err))
+		}
 	}
 	defer outFile.Close()
 
 	_, err = io.Copy(outFile, getResp.Body)
 	if err != nil {
-		errMsg := fmt.Sprintf("Error saving download: %v", err)
-		resp["error"] = errMsg
-		resp["status"] = "failed"
-		return resp, fmt.Errorf(errMsg)
+		(*resp)["status"] = "failed"
+		return resp, server.NewServerError(500, fmt.Sprintf("Error saving download: %v", err))
+	}
+	log.Printf("Download complete for track ID %d. File temporarily saved to %s", trackID, filePath)
+
+	// --- Start Download Completion Actions ---
+
+	// 1. Get metadata
+	title, titleOK := track["title"].(string)
+	artists, artistsOK := track["artists"].(string)
+	if !titleOK || !artistsOK {
+		(*resp)["status"] = "failed"
+		return resp, server.NewServerError(500, "Missing or invalid track title or artists in metadata")
 	}
 
-	log.Printf("Download complete for track ID %d. File saved to %s", trackID, filePath)
-	resp["status"] = "completed"
-	resp["metadata"] = map[string]interface{}{ "filename": filename, "path": filePath }
-	return resp, nil
+	// 2. Construct new filename
+	newFilename := fmt.Sprintf("%s - %s.mp3", artists, title)
+	// Basic filename sanitization (replace invalid characters) - improve as needed
+	newFilename = regexp.MustCompile(`[^a-zA-Z0-9\s\-_.,()\[\]{}]`).ReplaceAllString(newFilename, "")
+
+	if newFilename == "" || len(newFilename) > 255 { // Basic check for filename validity
+		(*resp)["status"] = "failed"
+		return resp, server.NewServerError(500, fmt.Sprintf("Invalid filename generated: '%s'", newFilename))
+	}
+
+	// 3. Determine destination path (using a default for now)
+	downloadDir := "./downloads" // In a real app, get this from config
+	if _, err := os.Stat(downloadDir); os.IsNotExist(err) {
+		os.MkdirAll(downloadDir, 0755) //Create the directory if it doesn't exist. Handle potential error in production.
+	}
+	newFilePath := filepath.Join(downloadDir, newFilename)
+
+	// 4. Rename and move the file
+	err = os.Rename(filePath, newFilePath)
+	if err != nil {
+		(*resp)["status"] = "failed"
+		return resp, server.NewServerError(500, fmt.Sprintf("Error renaming and moving file: %v", err))
+	}
+	log.Printf("Renamed and moved file to: %s", newFilePath)
+
+	// 5. Delete temporary file
+	err = os.Remove(filePath)
+	if err != nil {
+		log.Printf("Error deleting temporary file %s: %v", filePath, err) // Log but don't fail the download
+	}
+
+	// 6. Tag the file (Placeholder - implement actual tagging logic)
+	log.Printf("File tagging would be implemented here for: %s", newFilePath)
+
+	// --- End Download Completion Actions ---
+
+	resp["status"] = "completed" // Update status after all actions are complete
+	resp["metadata"] = map[string]interface{}{"filename": newFilename, "path": newFilePath} // Update metadata
+	return resp, nil // Return successful response
 }
 
 func processDownload(downloadID string, track map[string]interface{}) {
@@ -255,20 +336,22 @@ func processDownload(downloadID string, track map[string]interface{}) {
     downloadsMutex.Unlock()
 
     resp, err := processDownloadInternal(track)
-	if err != nil {
-		log.Printf("processDownloadInternal error: %v", err)
-		// resp already contains error details, no need to modify it here.
-	}
-
-    downloadsMutex.Lock()
-    defer downloadsMutex.Unlock()
-
-    if resp["error"] != nil {
-		if resp["metadata"] == nil {
-			resp["metadata"] = make(map[string]interface{})
+    if err != nil {
+        log.Printf("processDownloadInternal error: %v", err)
+		if serverErr, ok := err.(*server.ServerError); ok {
+			status.Metadata["Code"] = serverErr.Code
+			status.Metadata["error"] = serverErr.Message
+		} else {
+			status.Metadata["error"] = err.Error()
 		}
-		if err != nil {
-			resp["metadata"].(map[string]interface{})["internal_error"] = err.Error() //Add stack trace or other debugging info here
+		if resp != nil && resp["metadata"] != nil {
+			if _, ok := resp["metadata"].(map[string]interface{})["internal_error"]; !ok {
+				resp["metadata"].(map[string]interface{})["internal_error"] = err.Error() // Add stack trace or other debugging info here if not already present
+			}
+		} else if resp != nil {
+			resp["metadata"] = map[string]interface{}{"internal_error": err.Error()}
+		} else {
+			resp = &map[string]interface{}{"metadata": map[string]interface{}{"internal_error": err.Error()}}
 		}
         status.Status = "failed"
 		status.Metadata["error"] = resp["error"]
@@ -288,62 +371,55 @@ func statusHandler(w http.ResponseWriter, r *http.Request) {
     defer downloadsMutex.Unlock()
 
     w.Header().Set("Content-Type", "application/json")
-    if err := json.NewEncoder(w).Encode(downloads); err != nil {
+	if err := json.NewEncoder(w).Encode(downloads); err != nil {
 		log.Printf("Error encoding status response: %v", err)
-		http.Error(w, "Error encoding status", http.StatusInternalServerError)
+		serverErr := server.NewServerError(http.StatusInternalServerError, fmt.Sprintf("Error encoding status: %v", err))
+		w.WriteHeader(serverErr.Code)
+		json.NewEncoder(w).Encode(map[string]string{"error": serverErr.Message})
 		return
+
 	}
 	log.Println("Returned download status")
 }
 
-func configHandler(w http.ResponseWriter, r *http.Request) {
+func configureHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet: 
 		getConfig(w, r)
-	case http.MethodPut, http.MethodPost:
-		updateConfig(w, r)
-	
+	case http.MethodPut, http.MethodPost:{
+			code := http.StatusInternalServerError
+			if serverErr, ok := err.(*server.ServerError); ok {
+				code = serverErr.Code
+			}
+			w.WriteHeader(code)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		w.WriteHeader(code)
+		json.NewEncoder(w).Encode(map[string]interface{}{"status": "config updated"})
+		log.Println("Configuration updated successfully")}
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
-func getConfig(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(cfg); err != nil {
-		log.Printf("Error encoding config response: %v", err)
-		http.Error(w, "Error encoding config", http.StatusInternalServerError)
-		return
-	}
-	log.Println("Returned current configuration")
-}
 
-func configureHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodGet {
-		getConfig(w, r)
-	}
-	// Add PUT/POST handling if needed for updating config.
-}
-
-func updateConfig(w http.ResponseWriter, r *http.Request) {
+func updateConfig(r *http.Request) (interface{}, error) {
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		log.Printf("Error reading config request body: %v", err)
-		http.Error(w, "Error reading request body", http.StatusBadRequest)
-		return
+		return nil, server.NewServerError(http.StatusBadRequest, "Error reading request body")
 	}
 	defer r.Body.Close()
 
 	var newCfg Config
 	if err := yaml.Unmarshal(body, &newCfg); err != nil {
 		http.Error(w, fmt.Sprintf("Error parsing config: %v", err), http.StatusBadRequest)
-		return
+		return nil, server.NewServerError(http.StatusBadRequest, fmt.Sprintf("Error parsing config: %v", err))
 	}
 
 	if newCfg.MaxConcurrentDownloads <= 0 {
-		http.Error(w, "Invalid max_concurrent_downloads value", http.StatusBadRequest)
-		return
+		return nil, server.NewServerError(http.StatusBadRequest, "Invalid max_concurrent_downloads value")
 	}
 
 	cfg.MaxConcurrentDownloads = newCfg.MaxConcurrentDownloads
