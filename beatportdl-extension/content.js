@@ -131,7 +131,7 @@ function injectDownloadButton() {
           }
         };
 
-        sendDownloadRequest();
+        initiateDownloadWithRetries(sendDownloadRequest);
 
         // Function to poll for status updates
         const pollForStatus = (trackURL) => {
@@ -150,7 +150,7 @@ function injectDownloadButton() {
 
               if (downloadStatus) {
                 const status = downloadStatus.Status;
-                const error = downloadStatus.Metadata?.error;
+                const error = downloadStatus.Metadata?.error || 'Unknown error';
 
                 if (status === 'downloading') {
                   downloadButton.textContent = 'Downloading';
@@ -165,21 +165,63 @@ function injectDownloadButton() {
                   clearInterval(intervalId);
                   // Show retry
                   downloadButton.style.display = 'none';
-                  retryButton.style.display = 'inline-block';
-                  downloadButton.disabled = false;
-
+                  retryButton.style.display = 'inline-block'; // Show retry
+                  downloadButton.disabled = false; // Enable retry
                 }
               }
             } catch (error) {
               console.error('Error polling for status:', error);
-              downloadButton.textContent = 'Download Failed: ' + error.message;
-              // Consider offering a retry instead of just disabling
-              clearInterval(intervalId); // Stop polling
+              handleDownloadError('Download Failed: Server not responding.', true);
+              clearInterval(intervalId);
+            }
+          }, 2000);
+
+          // Timeout for polling
+          setTimeout(() => {
+            clearInterval(intervalId);
+            if (downloadButton.textContent !== 'Download Complete') {
+              console.error('Polling timed out.');
+              handleDownloadError('Download Failed: Server timed out.', true);
+            }
+          }, 5000);
+
+          const handleDownloadError = (message, showRetry = false) => {
+            downloadButton.textContent = message;
+            spinner.style.display = 'none';
+            if (showRetry) {
+              downloadButton.style.display = 'none';
+              retryButton.style.display = 'inline-block';
+              retryButton.disabled = false;
+            } else {
               downloadButton.disabled = false;
             }
-          }, 2000); // Poll every 2 seconds
+          };
 
-          // Initial status (in case of immediate failure)
+          // Retry Logic
+          const initiateDownloadWithRetries = async (downloadFunc) => {
+            let retries = 2;
+            const attemptDownload = async () => {
+              try {
+                await downloadFunc();
+              } catch (err) {
+                console.error(`Download attempt failed: ${err}. Retries left: ${retries}`);
+                if (retries > 0) {
+                  retries--;
+                  await new Promise(resolve => setTimeout(resolve, 1000)); // 1-second delay
+                  await attemptDownload();
+                } else {
+                  handleDownloadError("Download Failed: Max retries exceeded", true);
+                }
+              }
+            };
+            await attemptDownload();
+          };
+
+          retryButton.addEventListener('click', () => {
+            retryButton.style.display = 'none';
+            downloadButton.style.display = 'inline-block';
+            initiateDownloadWithRetries(sendDownloadRequest); // Retry with full logic
+          });
           if (downloadButton.textContent !== 'Download Complete!') {
             downloadButton.textContent = 'Preparing Download...';
           }
@@ -194,9 +236,29 @@ function injectDownloadButton() {
       }
     });
 
+    const handleDownloadError = (message, showRetry = false) => {
+      downloadButton.textContent = message;
+      spinner.style.display = 'none';
+      if (showRetry) {
+        downloadButton.style.display = 'none';
+        retryButton.style.display = 'inline-block';
+        retryButton.disabled = false;
+      } else {
+        downloadButton.disabled = false;
+      }
+    });
+
     // Find a suitable location to insert the button (e.g., near the track title)
     const titleElement = document.querySelector('h1[itemprop="name"]'); // Adjust selector as needed
     if (titleElement && titleElement.parentNode) {
+
+      //Health check
+      const healthCheck = async () => {
+        try{
+            await fetch('http://localhost:8080/');
+        }catch (e){
+            handleDownloadError("Server Unavailable");
+        }};
       titleElement.parentNode.appendChild(buttonContainer);
     } else {
       console.error('Could not find track title element.');
