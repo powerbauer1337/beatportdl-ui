@@ -67,8 +67,10 @@ function injectDownloadButton() {
 
           const data = await response.json();
           console.log('Download request sent:', data);
-          // Provide feedback to the user (e.g., change button text)
+
+          // Provide immediate feedback to the user
           downloadButton.textContent = 'Download Started...';
+          // You could optionally add a small temporary message here
         } catch (error) {
           console.error('Error sending download request:', error);
           // Display an error message to the user
