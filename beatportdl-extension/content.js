@@ -81,6 +81,7 @@ function injectDownloadButton() {
             console.error('Error sending download request:', error);
             // Display an error message to the user
             downloadButton.textContent = 'Download Failed: ' + error.message;
+            downloadButton.disabled = false;
           }
         };
 
@@ -120,6 +121,7 @@ function injectDownloadButton() {
             } catch (error) {
               console.error('Error polling for status:', error);
               downloadButton.textContent = 'Download Failed: ' + error.message;
+              // Consider offering a retry instead of just disabling
               clearInterval(intervalId); // Stop polling
               downloadButton.disabled = false;
             }
