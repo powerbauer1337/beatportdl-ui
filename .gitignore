@@ -1,0 +1,11 @@
+.DS_Store
+.vscode
+.idea
+.env
+bin/
+temp/
+error.log
+beatportdl-credentials.json
+beatportdl-config.yml
+downloads/
+beatportdl
