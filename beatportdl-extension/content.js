@@ -48,42 +48,88 @@ function injectDownloadButton() {
     downloadButton.style.borderRadius = '4px';
     downloadButton.style.cursor = 'pointer';
 
-    // Add click listener (implementation will be in later steps)
+    // Add click listener
     downloadButton.addEventListener('click', async () => {
       const trackInfo = extractTrackInfo();
       if (trackInfo) {
-        try {
-          const response = await fetch('http://localhost:8080/download', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ tracks: [trackInfo] }),
-          });
+        // Change button text and disable
+        downloadButton.textContent = 'Preparing Download...';
+        downloadButton.disabled = true;
 
-          if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+        // Send download request
+        const sendDownloadRequest = async () => {
+          try {
+            const response = await fetch('http://localhost:8080/download', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ tracks: [trackInfo] }),
+            });
+
+            if (!response.ok) {
+              throw new Error(`HTTP error! status: ${response.status}`);
+            }
+
+            const data = await response.json();
+            console.log('Download request sent:', data);
+
+            // Start polling for status updates
+            pollForStatus(trackInfo.url);
+
+          } catch (error) {
+            console.error('Error sending download request:', error);
+            // Display an error message to the user
+            downloadButton.textContent = 'Download Failed: ' + error.message;
           }
+        };
 
-          const data = await response.json();
-          console.log('Download request sent:', data);
+        sendDownloadRequest();
 
-          // Provide immediate feedback to the user
-          downloadButton.textContent = 'Download Started...';
-          // You could optionally add a small temporary message here
-        } catch (error) {
-          console.error('Error sending download request:', error);
-          // Display an error message to the user
-          const errorMessage = document.createElement('div');
-          errorMessage.textContent = 'Download Failed: ' + error.message;
-          errorMessage.style.color = 'red';
-          errorMessage.style.marginTop = '5px';
-          downloadButton.parentNode.insertBefore(errorMessage, downloadButton.nextSibling);
-          // Optionally, allow the user to retry
-          downloadButton.textContent = 'Retry Download';
-        }
-      } else {
-        console.error('Failed to extract track information.');
+        // Function to poll for status updates
+        const pollForStatus = (trackURL) => {
+          const intervalId = setInterval(async () => {
+            try {
+              const response = await fetch('http://localhost:8080/status');
+              if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+              }
+
+              const data = await response.json();
+              console.log('Status update:', data);
+
+              // Find the relevant download
+              const downloadStatus = data.find(status => status.TrackURL === trackURL);
+
+              if (downloadStatus) {
+                const status = downloadStatus.Status;
+                const error = downloadStatus.Metadata?.error;
+
+                if (status === 'downloading') {
+                  downloadButton.textContent = 'Downloading...';
+                } else if (status === 'completed') {
+                  downloadButton.textContent = 'Download Complete!';
+                  clearInterval(intervalId); // Stop polling
+                  downloadButton.disabled = false;
+                } else if (status === 'failed') {
+                  downloadButton.textContent = `Download Failed: ${error || 'Unknown error'}`;
+                  clearInterval(intervalId); // Stop polling
+                  downloadButton.disabled = false;
+                }
+              }
+            } catch (error) {
+              console.error('Error polling for status:', error);
+              downloadButton.textContent = 'Download Failed: ' + error.message;
+              clearInterval(intervalId); // Stop polling
+              downloadButton.disabled = false;
+            }
+          }, 2000); // Poll every 2 seconds
+
+          // Initial status (in case of immediate failure)
+          if (downloadButton.textContent !== 'Download Complete!') {
+            downloadButton.textContent = 'Preparing Download...';
+          }
+        };
       }
     });
 
